@@ -9,21 +9,48 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  Users,
   Sparkles,
   Search,
-  Globe,
   Eye,
   X,
   Zap,
-  FileText,
   RotateCcw,
+  Square,
+  Copy,
 } from "lucide-react";
 import "./App.css";
 
 const CONCURRENCY = 3;
 
-const API_BASE = import.meta.env.DEV ? "" : "";
+const CSV_FIELD_MAP = {
+  email: ["email", "e-mail", "correo", "correo electrónico", "mail"],
+  nombre: ["nombre", "name", "first name", "firstname"],
+  apellidos: ["apellidos", "apellido", "last name", "lastname", "surname"],
+  empresa: ["empresa", "company", "compañía", "name", "business"],
+  web: ["web", "website", "url", "sitio web", "página web"],
+  telefono: ["teléfono", "telefono", "phone", "tel"],
+  linkedin: ["linkedin", "linked in", "linkedin url"],
+  cargo: ["cargo", "position", "puesto", "job title", "role"],
+  ciudad: ["ciudad", "city", "state", "localidad", "población"],
+  pais: ["país", "pais", "country"],
+  tag: ["tag", "tags", "etiqueta"],
+  estado: ["estado", "status"],
+  sector: ["sector", "industry", "industria"],
+  direccion: ["dirección", "direccion", "address", "domicilio"],
+};
+
+function mapHeaders(rawHeaders) {
+  const map = {};
+  for (const [field, aliases] of Object.entries(CSV_FIELD_MAP)) {
+    for (const h of rawHeaders) {
+      if (aliases.includes(h.trim().toLowerCase())) {
+        map[field] = h;
+        break;
+      }
+    }
+  }
+  return map;
+}
 
 function App() {
   const [leads, setLeads] = useState([]);
@@ -32,6 +59,8 @@ function App() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0, phase: "" });
+  const [shouldAutoStart, setShouldAutoStart] = useState(false);
+  const [showLogs, setShowLogs] = useState(true);
   const fileInputRef = useRef(null);
   const abortRef = useRef(false);
   const logEndRef = useRef(null);
@@ -42,15 +71,22 @@ function App() {
       minute: "2-digit",
       second: "2-digit",
     });
-    setLogs((prev) => [...prev.slice(-200), { time, msg, type }]);
+    setLogs((prev) => [...prev.slice(-300), { time, msg, type }]);
   }, []);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
+  useEffect(() => {
+    if (shouldAutoStart && leads.length > 0 && !processing) {
+      setShouldAutoStart(false);
+      startProcessing();
+    }
+  }, [shouldAutoStart, leads, processing]);
+
   const handleFileUpload = (file) => {
-    if (!file || !file.name.endsWith(".csv")) {
+    if (!file || (!file.name.endsWith(".csv") && !file.name.endsWith(".CSV"))) {
       addLog("El archivo debe ser un CSV", "error");
       return;
     }
@@ -58,20 +94,36 @@ function App() {
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      encoding: "UTF-8",
       complete: (results) => {
+        const rawHeaders = results.meta.fields || [];
+        const hMap = mapHeaders(rawHeaders);
+
+        const get = (row, field) => {
+          const key = hMap[field];
+          return key ? (row[key] || "").trim() : "";
+        };
+
         const parsed = results.data
-          .filter((row) => row.name || row.email)
+          .filter((row) => get(row, "empresa") || get(row, "email") || get(row, "nombre"))
           .map((row, idx) => ({
             id: idx,
-            name: row.name || "",
-            email: row.email || "",
-            website: row.website || "",
-            state: row.state || "",
-            address: row.address || "",
-            country: row.country || "",
-            query: row.query || "",
-            source: row.source || "",
-            companyName: "",
+            email: get(row, "email"),
+            nombre: get(row, "nombre"),
+            apellidos: get(row, "apellidos"),
+            empresa: get(row, "empresa"),
+            web: get(row, "web"),
+            telefono: get(row, "telefono"),
+            linkedin: get(row, "linkedin"),
+            cargo: get(row, "cargo"),
+            ciudad: get(row, "ciudad"),
+            pais: get(row, "pais"),
+            tag: get(row, "tag"),
+            estadoOriginal: get(row, "estado"),
+            sector: get(row, "sector"),
+            direccion: get(row, "direccion"),
+            // Enriched fields
+            empresaNormalizada: "",
             servicio: "",
             icebreaker: "",
             serpResults: null,
@@ -81,9 +133,16 @@ function App() {
             error: "",
           }));
 
+        if (parsed.length === 0) {
+          addLog(`CSV vacío o columnas no reconocidas. Detectadas: ${rawHeaders.join(", ")}`, "error");
+          return;
+        }
+
         setLeads(parsed);
         setLogs([]);
-        addLog(`CSV cargado: ${parsed.length} leads encontrados`, "success");
+        addLog(`CSV cargado: ${parsed.length} leads. Columnas mapeadas: ${Object.keys(hMap).join(", ")}`, "success");
+        addLog("Iniciando enriquecimiento automático...", "info");
+        setShouldAutoStart(true);
       },
       error: (err) => {
         addLog(`Error al parsear CSV: ${err.message}`, "error");
@@ -92,16 +151,22 @@ function App() {
   };
 
   const callApi = async (endpoint, body) => {
-    const res = await fetch(`${API_BASE}/api/${endpoint}`, {
+    const res = await fetch(`/api/${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`API ${endpoint} (${res.status}): ${text}`);
+      throw new Error(`${endpoint} (${res.status}): ${text.slice(0, 200)}`);
     }
     return res.json();
+  };
+
+  const getDisplayName = (lead) => {
+    if (lead.empresa) return lead.empresa;
+    const parts = [lead.nombre, lead.apellidos].filter(Boolean);
+    return parts.join(" ") || "Sin nombre";
   };
 
   const processLead = async (lead, index) => {
@@ -113,67 +178,63 @@ function App() {
       );
     };
 
+    const displayName = getDisplayName(lead);
+
     try {
       update({ status: "processing" });
 
-      // FASE 1: Normalizar nombre
-      addLog(`[${index + 1}] Normalizando: ${lead.name}`);
+      // FASE 1: Normalizar nombre de empresa
+      addLog(`[${index + 1}] Normalizando: ${displayName}`);
       setProgress((p) => ({ ...p, phase: "Normalizando nombre" }));
       const { companyName } = await callApi("normalize-name", {
-        name: lead.name,
+        name: displayName,
       });
-      update({ companyName });
+      update({ empresaNormalizada: companyName });
       addLog(`[${index + 1}] → ${companyName}`, "success");
 
       if (abortRef.current) return;
 
-      // FASE 2: Extraer servicio de la web
-      addLog(`[${index + 1}] Analizando web: ${lead.website || "sin web"}`);
-      setProgress((p) => ({ ...p, phase: "Scraping web + servicio" }));
+      // FASE 2: Scraping web + servicio
+      addLog(`[${index + 1}] Analizando web: ${lead.web || "sin web"}`);
+      setProgress((p) => ({ ...p, phase: "Scraping web" }));
       const { servicio } = await callApi("extract-service", {
-        website: lead.website,
+        website: lead.web,
       });
       update({ servicio });
       addLog(`[${index + 1}] Servicio: ${servicio}`, "success");
 
       if (abortRef.current) return;
 
-      // FASE 3: Búsqueda real en Google con Serper
+      // FASE 3: Búsqueda real Google
       let serpResults = null;
       let serpQuery = "";
-      if (lead.state && servicio && servicio !== "su servicio principal") {
-        addLog(`[${index + 1}] Buscando en Google: "${servicio} en ${lead.state}"`);
-        setProgress((p) => ({ ...p, phase: "Búsqueda en Google" }));
+      if (lead.ciudad && servicio && servicio !== "su servicio principal") {
+        addLog(`[${index + 1}] Google: "${servicio} en ${lead.ciudad}"`);
+        setProgress((p) => ({ ...p, phase: "Google SERP" }));
         try {
           const serpData = await callApi("serp-search", {
             keyword: servicio,
-            city: lead.state,
+            city: lead.ciudad,
           });
           serpResults = serpData.results;
           serpQuery = serpData.query;
-          addLog(
-            `[${index + 1}] SERP: ${serpResults.length} resultados para "${serpQuery}"`,
-            "success"
-          );
-        } catch (serpErr) {
-          addLog(
-            `[${index + 1}] SERP fallido (se usará icebreaker genérico): ${serpErr.message}`,
-            "error"
-          );
+          addLog(`[${index + 1}] SERP: ${serpResults.length} resultados`, "success");
+        } catch (e) {
+          addLog(`[${index + 1}] SERP fallido: ${e.message}`, "error");
         }
       }
 
       if (abortRef.current) return;
 
-      // FASE 4: Generar icebreaker
-      addLog(`[${index + 1}] Generando icebreaker para ${companyName}`);
-      setProgress((p) => ({ ...p, phase: "Generando icebreaker" }));
+      // FASE 4: Icebreaker
+      addLog(`[${index + 1}] Generando icebreaker...`);
+      setProgress((p) => ({ ...p, phase: "Icebreaker" }));
       const ibData = await callApi("generate-icebreaker", {
         companyName,
-        city: lead.state,
+        city: lead.ciudad,
         servicio,
         serpResults,
-        website: lead.website,
+        website: lead.web,
       });
 
       update({
@@ -185,10 +246,10 @@ function App() {
         error: "",
       });
 
-      addLog(`[${index + 1}] ✓ Completado: ${companyName}`, "success");
+      addLog(`[${index + 1}] Completado: ${companyName}`, "success");
     } catch (err) {
       update({ status: "error", error: err.message });
-      addLog(`[${index + 1}] ✗ Error: ${err.message}`, "error");
+      addLog(`[${index + 1}] Error: ${err.message}`, "error");
     }
 
     setProgress((p) => ({ ...p, current: p.current + 1 }));
@@ -198,11 +259,9 @@ function App() {
     abortRef.current = false;
     setProcessing(true);
 
-    const pending = leads.filter(
-      (l) => l.status === "pending" || l.status === "error"
-    );
+    const pending = leads.filter((l) => l.status === "pending" || l.status === "error");
     setProgress({ current: 0, total: pending.length, phase: "Iniciando..." });
-    addLog(`Iniciando procesamiento de ${pending.length} leads`, "info");
+    addLog(`Procesando ${pending.length} leads (${CONCURRENCY} en paralelo)`, "info");
 
     const queue = [...pending];
     const workers = Array.from({ length: CONCURRENCY }, async () => {
@@ -216,60 +275,34 @@ function App() {
     });
 
     await Promise.all(workers);
-
     setProcessing(false);
-    if (abortRef.current) {
-      addLog("Procesamiento detenido por el usuario", "error");
-    } else {
-      addLog("¡Procesamiento completado!", "success");
-    }
-  };
-
-  const stopProcessing = () => {
-    abortRef.current = true;
-    addLog("Deteniendo procesamiento...", "error");
-  };
-
-  const resetLeads = () => {
-    setLeads((prev) =>
-      prev.map((l) => ({
-        ...l,
-        companyName: "",
-        servicio: "",
-        icebreaker: "",
-        serpResults: null,
-        serpQuery: "",
-        hasRealSerpData: false,
-        status: "pending",
-        error: "",
-      }))
-    );
-    setLogs([]);
-    setProgress({ current: 0, total: 0, phase: "" });
-    addLog("Leads reseteados", "info");
+    addLog(abortRef.current ? "Detenido por el usuario" : "Procesamiento completado!", abortRef.current ? "error" : "success");
   };
 
   const downloadCSV = () => {
     const rows = leads.map((l) => ({
-      name: l.name,
-      email: l.email,
-      website: l.website,
-      state: l.state,
-      address: l.address,
-      country: l.country,
-      query: l.query,
-      source: l.source,
-      companyName: l.companyName,
-      servicio_destacado: l.servicio,
-      icebreaker: l.icebreaker,
-      datos_serp_reales: l.hasRealSerpData ? "sí" : "no",
-      busqueda_google: l.serpQuery,
+      Email: l.email,
+      Nombre: l.nombre,
+      Apellidos: l.apellidos,
+      Empresa: l.empresa,
+      "Empresa Normalizada": l.empresaNormalizada,
+      Web: l.web,
+      "Teléfono": l.telefono,
+      LinkedIn: l.linkedin,
+      Cargo: l.cargo,
+      Ciudad: l.ciudad,
+      "País": l.pais,
+      Tag: l.tag,
+      Sector: l.sector,
+      "Dirección": l.direccion,
+      "Servicio Detectado": l.servicio,
+      Icebreaker: l.icebreaker,
+      "Datos SERP Reales": l.hasRealSerpData ? "Sí" : "No",
+      "Búsqueda Google": l.serpQuery,
     }));
 
     const csv = Papa.unparse(rows);
-    const blob = new Blob(["\ufeff" + csv], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -284,453 +317,342 @@ function App() {
     done: leads.filter((l) => l.status === "done").length,
     processing: leads.filter((l) => l.status === "processing").length,
     errors: leads.filter((l) => l.status === "error").length,
-    withSerp: leads.filter((l) => l.hasRealSerpData).length,
+    serp: leads.filter((l) => l.hasRealSerpData).length,
   };
 
-  const progressPercent =
-    progress.total > 0
-      ? Math.round((progress.current / progress.total) * 100)
-      : 0;
+  const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
 
-  return (
-    <div className="app">
-      <header className="header">
-        <div className="header-icon">
-          <Zap size={22} />
+  // ─── No leads: upload screen ───
+  if (leads.length === 0) {
+    return (
+      <div className="app">
+        <div className="topbar">
+          <div className="topbar-logo"><Zap size={16} /></div>
+          <span className="topbar-title">Clay Clone — Lead Enrichment</span>
         </div>
-        <div>
-          <h1>Clay Clone — Lead Enrichment Pipeline</h1>
-          <p>
-            CSV → Normalización → Web Scraping → Google SERP → Icebreaker
-            personalizado
-          </p>
-        </div>
-      </header>
-
-      <main className="main">
-        {leads.length === 0 ? (
+        <div
+          className="upload-overlay"
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); handleFileUpload(e.dataTransfer.files[0]); }}
+        >
           <div
-            className={`upload-zone ${dragging ? "dragging" : ""}`}
+            className={`upload-box ${dragging ? "dragging" : ""}`}
             onClick={() => fileInputRef.current?.click()}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragging(false);
-              const file = e.dataTransfer.files[0];
-              handleFileUpload(file);
-            }}
           >
-            <div className="upload-zone-icon">
-              <Upload size={28} />
-            </div>
+            <div className="upload-icon"><Upload size={28} /></div>
             <h3>Sube tu CSV de leads</h3>
-            <p>
-              Arrastra y suelta o{" "}
-              <span className="highlight">haz clic para seleccionar</span>
+            <p>Arrastra y suelta o <span className="highlight">haz clic para seleccionar</span></p>
+            <p style={{ marginTop: 6, fontSize: "0.78rem", color: "var(--text-dim)" }}>
+              El enriquecimiento comienza automáticamente
             </p>
-            <p style={{ marginTop: 8 }}>
-              Columnas esperadas: name, email, website, state
-            </p>
+            <div className="upload-cols">
+              {["Email","Nombre","Apellidos","Empresa","Web","Ciudad","Sector","Cargo"].map((c) => (
+                <span key={c} className="upload-col-tag">{c}</span>
+              ))}
+            </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.CSV"
               style={{ display: "none" }}
               onChange={(e) => handleFileUpload(e.target.files[0])}
             />
           </div>
-        ) : (
-          <>
-            {/* Stats */}
-            <div className="stats-bar">
-              <div className="stat-card">
-                <div className="stat-icon purple">
-                  <Users size={20} />
-                </div>
-                <div className="stat-info">
-                  <span className="stat-value">{stats.total}</span>
-                  <span className="stat-label">Total leads</span>
-                </div>
+        </div>
+        {logs.length > 0 && (
+          <div className="log-drawer">
+            {logs.map((l, i) => (
+              <div key={i} className="log-row">
+                <span className="log-time">{l.time}</span>
+                <span className={`log-msg ${l.type}`}>{l.msg}</span>
               </div>
-              <div className="stat-card">
-                <div className="stat-icon green">
-                  <CheckCircle2 size={20} />
-                </div>
-                <div className="stat-info">
-                  <span className="stat-value">{stats.done}</span>
-                  <span className="stat-label">Completados</span>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon yellow">
-                  <Loader size={20} />
-                </div>
-                <div className="stat-info">
-                  <span className="stat-value">{stats.processing}</span>
-                  <span className="stat-label">Procesando</span>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon blue">
-                  <Search size={20} />
-                </div>
-                <div className="stat-info">
-                  <span className="stat-value">{stats.withSerp}</span>
-                  <span className="stat-label">Con datos SERP reales</span>
-                </div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-icon red">
-                  <AlertCircle size={20} />
-                </div>
-                <div className="stat-info">
-                  <span className="stat-value">{stats.errors}</span>
-                  <span className="stat-label">Errores</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Controls */}
-            <div className="controls">
-              {!processing ? (
-                <>
-                  <button
-                    className="btn btn-primary"
-                    onClick={startProcessing}
-                    disabled={stats.done === stats.total && stats.errors === 0}
-                  >
-                    <Play size={16} />
-                    {stats.done > 0 ? "Continuar procesamiento" : "Iniciar enriquecimiento"}
-                  </button>
-                  {stats.done > 0 && (
-                    <button className="btn btn-success" onClick={downloadCSV}>
-                      <Download size={16} />
-                      Descargar CSV enriquecido
-                    </button>
-                  )}
-                  <button className="btn btn-secondary" onClick={resetLeads}>
-                    <RotateCcw size={16} />
-                    Resetear
-                  </button>
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => {
-                      setLeads([]);
-                      setLogs([]);
-                      setProgress({ current: 0, total: 0, phase: "" });
-                    }}
-                  >
-                    <Trash2 size={16} />
-                    Eliminar todo
-                  </button>
-                </>
-              ) : (
-                <button className="btn btn-danger" onClick={stopProcessing}>
-                  <X size={16} />
-                  Detener procesamiento
-                </button>
-              )}
-            </div>
-
-            {/* Progress */}
-            {(processing || progress.total > 0) && (
-              <div className="progress-container">
-                <div className="progress-header">
-                  <span>
-                    {processing ? (
-                      <>
-                        <Loader size={14} className="spinner" style={{ marginRight: 6, verticalAlign: "middle" }} />
-                        {progress.phase}
-                      </>
-                    ) : (
-                      "Procesamiento completado"
-                    )}
-                  </span>
-                  <strong>
-                    {progress.current} / {progress.total} ({progressPercent}%)
-                  </strong>
-                </div>
-                <div className="progress-bar">
-                  <div
-                    className="progress-fill"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-                <div className="progress-phases">
-                  <PhaseTag label="Normalizar" phase={1} current={progress.phase} />
-                  <PhaseTag label="Scraping web" phase={2} current={progress.phase} />
-                  <PhaseTag label="Google SERP" phase={3} current={progress.phase} />
-                  <PhaseTag label="Icebreaker" phase={4} current={progress.phase} />
-                </div>
-              </div>
-            )}
-
-            {/* Table */}
-            <div className="table-container">
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Nombre original</th>
-                      <th>Nombre normalizado</th>
-                      <th>Ciudad</th>
-                      <th>Web</th>
-                      <th>Servicio detectado</th>
-                      <th>SERP</th>
-                      <th>Icebreaker</th>
-                      <th>Estado</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leads.map((lead, idx) => (
-                      <tr key={lead.id}>
-                        <td style={{ color: "var(--text-dim)" }}>{idx + 1}</td>
-                        <td className="cell-name">{lead.name}</td>
-                        <td className="cell-normalized">
-                          {lead.companyName || "—"}
-                        </td>
-                        <td>{lead.state || "—"}</td>
-                        <td className="cell-website">
-                          {lead.website ? (
-                            <a
-                              href={
-                                lead.website.startsWith("http")
-                                  ? lead.website
-                                  : `https://${lead.website}`
-                              }
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {lead.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                            </a>
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                        <td className="cell-service">
-                          {lead.servicio || "—"}
-                        </td>
-                        <td>
-                          {lead.status === "done" && (
-                            <span
-                              className={`cell-serp-badge ${
-                                lead.hasRealSerpData
-                                  ? "serp-badge-real"
-                                  : "serp-badge-generic"
-                              }`}
-                            >
-                              {lead.hasRealSerpData ? (
-                                <>
-                                  <Search size={10} /> Real
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles size={10} /> Genérico
-                                </>
-                              )}
-                            </span>
-                          )}
-                        </td>
-                        <td className="cell-icebreaker">
-                          {lead.icebreaker
-                            ? lead.icebreaker.length > 120
-                              ? lead.icebreaker.slice(0, 120) + "..."
-                              : lead.icebreaker
-                            : "—"}
-                        </td>
-                        <td className="cell-status">
-                          <StatusBadge status={lead.status} />
-                        </td>
-                        <td>
-                          {lead.status === "done" && (
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: "4px 8px", fontSize: "0.72rem" }}
-                              onClick={() => setSelectedLead(lead)}
-                            >
-                              <Eye size={12} />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Logs */}
-            {logs.length > 0 && (
-              <div className="log-panel">
-                {logs.map((log, idx) => (
-                  <div key={idx} className="log-entry">
-                    <span className="log-time">{log.time}</span>
-                    <span className={`log-msg ${log.type}`}>{log.msg}</span>
-                  </div>
-                ))}
-                <div ref={logEndRef} />
-              </div>
-            )}
-          </>
+            ))}
+          </div>
         )}
-      </main>
+      </div>
+    );
+  }
 
-      {/* Detail modal */}
+  // ─── Main spreadsheet view ───
+  return (
+    <div className="app">
+      {/* Top bar */}
+      <div className="topbar">
+        <div className="topbar-logo"><Zap size={16} /></div>
+        <span className="topbar-title">Clay Clone</span>
+        <div className="topbar-divider" />
+        <div className="topbar-stats">
+          <span className="topbar-stat"><span className="dot dot-total" />{stats.total} leads</span>
+          <span className="topbar-stat"><span className="dot dot-done" />{stats.done} listos</span>
+          {stats.processing > 0 && <span className="topbar-stat"><span className="dot dot-processing" />{stats.processing} procesando</span>}
+          {stats.serp > 0 && <span className="topbar-stat"><span className="dot dot-serp" />{stats.serp} con SERP real</span>}
+          {stats.errors > 0 && <span className="topbar-stat"><span className="dot dot-error" />{stats.errors} errores</span>}
+        </div>
+        <div className="topbar-actions">
+          {processing && <span style={{ fontSize: "0.72rem", color: "var(--accent)" }}><Loader size={12} className="spinner" style={{ verticalAlign: "middle", marginRight: 4 }} />{progress.phase} — {pct}%</span>}
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="toolbar">
+        {!processing ? (
+          <>
+            <button
+              className="toolbar-btn primary"
+              onClick={startProcessing}
+              disabled={stats.done === stats.total && stats.errors === 0}
+            >
+              <Play size={13} />
+              {stats.done > 0 ? "Continuar" : "Enriquecer"}
+            </button>
+            {stats.done > 0 && (
+              <button className="toolbar-btn success" onClick={downloadCSV}>
+                <Download size={13} /> Descargar CSV
+              </button>
+            )}
+            <div className="toolbar-separator" />
+            <button className="toolbar-btn" onClick={() => setLeads((prev) => prev.map((l) => ({ ...l, empresaNormalizada: "", servicio: "", icebreaker: "", serpResults: null, serpQuery: "", hasRealSerpData: false, status: "pending", error: "" })))}>
+              <RotateCcw size={13} /> Resetear
+            </button>
+            <button className="toolbar-btn danger" onClick={() => { setLeads([]); setLogs([]); setProgress({ current: 0, total: 0, phase: "" }); }}>
+              <Trash2 size={13} /> Borrar
+            </button>
+          </>
+        ) : (
+          <button className="toolbar-btn danger" onClick={() => { abortRef.current = true; }}>
+            <X size={13} /> Detener
+          </button>
+        )}
+        <div className="toolbar-separator" />
+        <button className="toolbar-btn" onClick={() => setShowLogs((v) => !v)}>
+          <Square size={13} /> {showLogs ? "Ocultar log" : "Ver log"}
+        </button>
+      </div>
+
+      {/* Progress strip */}
+      {(processing || progress.total > 0) && (
+        <div className="progress-strip">
+          <div className="progress-strip-fill" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+
+      {/* Spreadsheet */}
+      <div className="spreadsheet-wrapper">
+        <table className="spreadsheet">
+          <colgroup>
+            <col className="col-row-num" />
+            <col className="col-status" />
+            <col className="col-email" />
+            <col className="col-narrow" />
+            <col className="col-narrow" />
+            <col className="col-medium" />
+            <col className="col-url" />
+            <col className="col-narrow" />
+            <col className="col-narrow" />
+            <col className="col-narrow" />
+            <col className="col-narrow" />
+            <col className="col-narrow" />
+            {/* Enriched */}
+            <col className="col-medium" />
+            <col className="col-service" />
+            <col className="col-serp" />
+            <col className="col-icebreaker" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Estado</th>
+              <th>Email</th>
+              <th>Nombre</th>
+              <th>Apellidos</th>
+              <th>Empresa</th>
+              <th>Web</th>
+              <th>Ciudad</th>
+              <th>Cargo</th>
+              <th>Sector</th>
+              <th>Teléfono</th>
+              <th>Tag</th>
+              {/* Enriched columns */}
+              <th className="th-enriched"><span className="th-group-label">IA</span>Nombre Normalizado</th>
+              <th className="th-enriched"><span className="th-group-label">IA</span>Servicio</th>
+              <th className="th-enriched"><span className="th-group-label">IA</span>SERP</th>
+              <th className="th-enriched"><span className="th-group-label">IA</span>Icebreaker</th>
+            </tr>
+          </thead>
+          <tbody>
+            {leads.map((lead, idx) => (
+              <tr
+                key={lead.id}
+                className={`row-${lead.status}`}
+                onClick={() => lead.status === "done" && setSelectedLead(lead)}
+                style={{ cursor: lead.status === "done" ? "pointer" : "default" }}
+              >
+                <td>{idx + 1}</td>
+                <td><StatusChip status={lead.status} /></td>
+                <td>{lead.email || "—"}</td>
+                <td>{lead.nombre || "—"}</td>
+                <td>{lead.apellidos || "—"}</td>
+                <td style={{ fontWeight: 500 }}>{lead.empresa || "—"}</td>
+                <td>
+                  {lead.web ? (
+                    <a
+                      href={lead.web.startsWith("http") ? lead.web : `https://${lead.web}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cell-link"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {lead.web.replace(/^https?:\/\//, "").replace(/\/$/, "").slice(0, 30)}
+                    </a>
+                  ) : "—"}
+                </td>
+                <td>{lead.ciudad || "—"}</td>
+                <td>{lead.cargo || "—"}</td>
+                <td>{lead.sector || "—"}</td>
+                <td>{lead.telefono || "—"}</td>
+                <td>{lead.tag || "—"}</td>
+                {/* Enriched */}
+                <td className="cell-enriched cell-company">{lead.empresaNormalizada || "—"}</td>
+                <td className="cell-enriched cell-service">{lead.servicio || "—"}</td>
+                <td className="cell-enriched">
+                  {lead.status === "done" && (
+                    <span className={`serp-chip ${lead.hasRealSerpData ? "serp-real" : "serp-generic"}`}>
+                      {lead.hasRealSerpData ? <><Search size={9} /> Real</> : <><Sparkles size={9} /> Gen.</>}
+                    </span>
+                  )}
+                </td>
+                <td className="cell-enriched cell-icebreaker">{lead.icebreaker || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Log drawer */}
+      {showLogs && logs.length > 0 && (
+        <div className="log-drawer">
+          {logs.map((l, i) => (
+            <div key={i} className="log-row">
+              <span className="log-time">{l.time}</span>
+              <span className={`log-msg ${l.type}`}>{l.msg}</span>
+            </div>
+          ))}
+          <div ref={logEndRef} />
+        </div>
+      )}
+
+      {/* Detail side panel */}
       {selectedLead && (
-        <div className="modal-overlay" onClick={() => setSelectedLead(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>
-              <Sparkles size={20} style={{ color: "var(--accent)" }} />
-              {selectedLead.companyName || selectedLead.name}
-            </h2>
+        <>
+          <div className="detail-panel-overlay" onClick={() => setSelectedLead(null)} />
+          <div className="detail-panel">
+            <div className="detail-panel-header">
+              <h2>
+                <Sparkles size={18} style={{ color: "var(--accent)" }} />
+                {selectedLead.empresaNormalizada || getDisplayName(selectedLead)}
+              </h2>
+              <button className="detail-close" onClick={() => setSelectedLead(null)}>
+                <X size={18} />
+              </button>
+            </div>
 
-            <div className="modal-section">
-              <label>Nombre original → Normalizado</label>
-              <div className="value">
-                {selectedLead.name} → <span style={{ color: "var(--accent)" }}>{selectedLead.companyName}</span>
+            <div className="detail-grid">
+              <div className="detail-section">
+                <div className="detail-label">Email</div>
+                <div className="detail-value">{selectedLead.email || "—"}</div>
+              </div>
+              <div className="detail-section">
+                <div className="detail-label">Ciudad</div>
+                <div className="detail-value">{selectedLead.ciudad || "—"}</div>
+              </div>
+              <div className="detail-section">
+                <div className="detail-label">Empresa original</div>
+                <div className="detail-value">{selectedLead.empresa || "—"}</div>
+              </div>
+              <div className="detail-section">
+                <div className="detail-label">Cargo</div>
+                <div className="detail-value">{selectedLead.cargo || "—"}</div>
               </div>
             </div>
 
-            <div className="modal-section">
-              <label>Ciudad</label>
-              <div className="value">{selectedLead.state || "No disponible"}</div>
+            <div className="detail-section">
+              <div className="detail-label">Nombre normalizado (IA)</div>
+              <div className="detail-value accent">{selectedLead.empresaNormalizada}</div>
             </div>
 
-            <div className="modal-section">
-              <label>Servicio detectado (scraping web)</label>
-              <div className="value yellow">{selectedLead.servicio}</div>
+            <div className="detail-section">
+              <div className="detail-label">Servicio detectado (scraping web)</div>
+              <div className="detail-value yellow">{selectedLead.servicio}</div>
             </div>
 
-            {selectedLead.serpResults && selectedLead.serpResults.length > 0 && (
-              <div className="modal-section">
-                <label>
-                  <Search size={12} style={{ verticalAlign: "middle" }} />{" "}
-                  Resultados reales de Google: "{selectedLead.serpQuery}"
-                </label>
-                <div>
-                  {selectedLead.serpResults.map((r, i) => {
-                    const isLead =
-                      selectedLead.website &&
-                      r.url
-                        ?.toLowerCase()
-                        .includes(
-                          extractDomain(selectedLead.website).toLowerCase()
-                        );
-                    return (
-                      <div key={i} className="serp-result-item">
-                        <div
-                          className={`serp-position ${isLead ? "is-lead" : ""}`}
-                        >
-                          {r.position}
-                        </div>
-                        <div className="serp-info">
-                          <div className="title">
-                            {r.title}
-                            {isLead && (
-                              <span
-                                style={{
-                                  marginLeft: 8,
-                                  color: "var(--green)",
-                                  fontSize: "0.7rem",
-                                }}
-                              >
-                                ← TU LEAD
-                              </span>
-                            )}
-                          </div>
-                          <div className="domain">{r.domain || r.url}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
+            {selectedLead.serpResults?.length > 0 && (
+              <div className="detail-section">
+                <div className="detail-label">
+                  <Search size={11} style={{ verticalAlign: "middle" }} /> Google: "{selectedLead.serpQuery}"
                 </div>
+                {selectedLead.serpResults.map((r, i) => {
+                  const isLead = selectedLead.web && r.url?.toLowerCase().includes(extractDomain(selectedLead.web).toLowerCase());
+                  return (
+                    <div key={i} className="serp-result-item">
+                      <div className={`serp-pos ${isLead ? "is-lead" : ""}`}>{r.position}</div>
+                      <div className="serp-detail">
+                        <div className="title">
+                          {r.title}
+                          {isLead && <span style={{ marginLeft: 6, color: "var(--green)", fontSize: "0.66rem" }}>TU LEAD</span>}
+                        </div>
+                        <div className="domain">{r.domain || r.url}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
-            <div className="modal-section">
-              <label>Icebreaker generado</label>
-              <div className="value" style={{ fontSize: "0.95rem", lineHeight: 1.6 }}>
+            <div className="detail-section">
+              <div className="detail-label">Icebreaker generado</div>
+              <div className="detail-value" style={{ fontSize: "0.9rem", lineHeight: 1.6 }}>
                 {selectedLead.icebreaker}
               </div>
               {selectedLead.hasRealSerpData && (
-                <div
-                  style={{
-                    marginTop: 6,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <span className="cell-serp-badge serp-badge-real">
-                    <Search size={10} /> Basado en datos reales de Google
-                  </span>
+                <div style={{ marginTop: 6 }}>
+                  <span className="serp-chip serp-real"><Search size={9} /> Basado en datos reales de Google</span>
                 </div>
               )}
             </div>
 
-            <div className="modal-actions">
+            <div className="detail-actions">
               <button
-                className="btn btn-secondary"
+                className="toolbar-btn primary"
                 onClick={() => {
                   navigator.clipboard.writeText(selectedLead.icebreaker);
-                  addLog("Icebreaker copiado al portapapeles", "success");
+                  addLog("Icebreaker copiado", "success");
                 }}
               >
-                Copiar icebreaker
+                <Copy size={13} /> Copiar icebreaker
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => setSelectedLead(null)}
-              >
-                Cerrar
-              </button>
+              <button className="toolbar-btn" onClick={() => setSelectedLead(null)}>Cerrar</button>
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-function StatusBadge({ status }) {
-  const config = {
-    pending: { label: "Pendiente", cls: "status-pending", icon: Clock },
-    processing: { label: "Procesando", cls: "status-processing", icon: Loader },
-    done: { label: "Listo", cls: "status-done", icon: CheckCircle2 },
-    error: { label: "Error", cls: "status-error", icon: AlertCircle },
+function StatusChip({ status }) {
+  const cfg = {
+    pending: { label: "Pendiente", cls: "chip-pending", icon: Clock },
+    processing: { label: "...", cls: "chip-processing", icon: Loader },
+    done: { label: "Listo", cls: "chip-done", icon: CheckCircle2 },
+    error: { label: "Error", cls: "chip-error", icon: AlertCircle },
   };
-
-  const c = config[status] || config.pending;
+  const c = cfg[status] || cfg.pending;
   const Icon = c.icon;
-
   return (
-    <span className={`status-badge ${c.cls}`}>
-      <Icon size={12} className={status === "processing" ? "spinner" : ""} />
+    <span className={`status-chip ${c.cls}`}>
+      <Icon size={11} className={status === "processing" ? "spinner" : ""} />
       {c.label}
-    </span>
-  );
-}
-
-function PhaseTag({ label, phase, current }) {
-  const phaseMap = {
-    1: "Normalizando nombre",
-    2: "Scraping web + servicio",
-    3: "Búsqueda en Google",
-    4: "Generando icebreaker",
-  };
-  const isActive = current === phaseMap[phase];
-  const isDone = false;
-
-  return (
-    <span className={`phase-tag ${isActive ? "active" : ""} ${isDone ? "done" : ""}`}>
-      <span className="phase-dot" />
-      {label}
     </span>
   );
 }
