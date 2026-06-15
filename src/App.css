@@ -587,6 +587,110 @@
   color: var(--text-dim);
 }
 
+/* ─── Limit picker modal ─── */
+.limit-picker-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 32px;
+  z-index: 52;
+  width: 420px;
+  max-width: 90vw;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translate(-50%, -48%); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.limit-picker-modal h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.limit-picker-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.limit-picker-desc strong {
+  color: var(--accent);
+}
+
+.limit-picker-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.limit-option {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 2px solid transparent;
+  transition: all 0.12s;
+  cursor: pointer;
+}
+
+.limit-option:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.limit-option.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.limit-picker-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.limit-picker-custom label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.limit-picker-custom input {
+  flex: 1;
+  padding: 7px 12px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.82rem;
+  outline: none;
+  max-width: 120px;
+}
+
+.limit-picker-custom input:focus {
+  border-color: var(--accent);
+}
+
+.limit-picker-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 /* ─── Spinner ─── */
 @keyframes spin {
   to { transform: rotate(360deg); }

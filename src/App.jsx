@@ -61,9 +61,13 @@ function App() {
   const [progress, setProgress] = useState({ current: 0, total: 0, phase: "" });
   const [shouldAutoStart, setShouldAutoStart] = useState(false);
   const [showLogs, setShowLogs] = useState(true);
+  const [processLimit, setProcessLimit] = useState(10);
+  const [showLimitPicker, setShowLimitPicker] = useState(false);
   const fileInputRef = useRef(null);
   const abortRef = useRef(false);
   const logEndRef = useRef(null);
+  const logUserScrolling = useRef(false);
+  const logContainerRef = useRef(null);
 
   const addLog = useCallback((msg, type = "info") => {
     const time = new Date().toLocaleTimeString("es-ES", {
@@ -75,13 +79,15 @@ function App() {
   }, []);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!logUserScrolling.current && logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
   }, [logs]);
 
   useEffect(() => {
     if (shouldAutoStart && leads.length > 0 && !processing) {
       setShouldAutoStart(false);
-      startProcessing();
+      setShowLimitPicker(true);
     }
   }, [shouldAutoStart, leads, processing]);
 
@@ -255,15 +261,19 @@ function App() {
     setProgress((p) => ({ ...p, current: p.current + 1 }));
   };
 
-  const startProcessing = async () => {
+  const startProcessing = async (limit) => {
     abortRef.current = false;
     setProcessing(true);
+    setShowLimitPicker(false);
 
-    const pending = leads.filter((l) => l.status === "pending" || l.status === "error");
-    setProgress({ current: 0, total: pending.length, phase: "Iniciando..." });
-    addLog(`Procesando ${pending.length} leads (${CONCURRENCY} en paralelo)`, "info");
+    const allPending = leads.filter((l) => l.status === "pending" || l.status === "error");
+    const effectiveLimit = limit || processLimit;
+    const toProcess = effectiveLimit === 0 ? allPending : allPending.slice(0, effectiveLimit);
 
-    const queue = [...pending];
+    setProgress({ current: 0, total: toProcess.length, phase: "Iniciando..." });
+    addLog(`Procesando ${toProcess.length} de ${allPending.length} leads pendientes (${CONCURRENCY} en paralelo)`, "info");
+
+    const queue = [...toProcess];
     const workers = Array.from({ length: CONCURRENCY }, async () => {
       while (queue.length > 0 && !abortRef.current) {
         const lead = queue.shift();
@@ -276,7 +286,15 @@ function App() {
 
     await Promise.all(workers);
     setProcessing(false);
-    addLog(abortRef.current ? "Detenido por el usuario" : "Procesamiento completado!", abortRef.current ? "error" : "success");
+
+    const remaining = leads.filter((l) => l.status === "pending").length - toProcess.length;
+    if (abortRef.current) {
+      addLog("Detenido por el usuario", "error");
+    } else if (remaining > 0) {
+      addLog(`Lote completado. Quedan ${remaining} leads pendientes.`, "success");
+    } else {
+      addLog("Procesamiento completado!", "success");
+    }
   };
 
   const downloadCSV = () => {
@@ -400,7 +418,7 @@ function App() {
           <>
             <button
               className="toolbar-btn primary"
-              onClick={startProcessing}
+              onClick={() => setShowLimitPicker(true)}
               disabled={stats.done === stats.total && stats.errors === 0}
             >
               <Play size={13} />
@@ -531,7 +549,16 @@ function App() {
 
       {/* Log drawer */}
       {showLogs && logs.length > 0 && (
-        <div className="log-drawer">
+        <div
+          className="log-drawer"
+          ref={logContainerRef}
+          onScroll={() => {
+            const el = logContainerRef.current;
+            if (!el) return;
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+            logUserScrolling.current = !atBottom;
+          }}
+        >
           {logs.map((l, i) => (
             <div key={i} className="log-row">
               <span className="log-time">{l.time}</span>
@@ -540,6 +567,53 @@ function App() {
           ))}
           <div ref={logEndRef} />
         </div>
+      )}
+
+      {/* Limit picker modal */}
+      {showLimitPicker && (
+        <>
+          <div className="detail-panel-overlay" onClick={() => setShowLimitPicker(false)} />
+          <div className="limit-picker-modal">
+            <h3>Cuántos leads procesar?</h3>
+            <p className="limit-picker-desc">
+              CSV cargado con <strong>{leads.length}</strong> leads. Elige cuántos quieres enriquecer ahora.
+            </p>
+            <div className="limit-picker-options">
+              {[5, 10, 25, 50, 100].map((n) => (
+                <button
+                  key={n}
+                  className={`limit-option ${processLimit === n ? "active" : ""}`}
+                  onClick={() => setProcessLimit(n)}
+                >
+                  {n}
+                </button>
+              ))}
+              <button
+                className={`limit-option ${processLimit === 0 ? "active" : ""}`}
+                onClick={() => setProcessLimit(0)}
+              >
+                Todos ({leads.filter((l) => l.status === "pending" || l.status === "error").length})
+              </button>
+            </div>
+            <div className="limit-picker-custom">
+              <label>O introduce un número:</label>
+              <input
+                type="number"
+                min="1"
+                max={leads.length}
+                value={processLimit || ""}
+                onChange={(e) => setProcessLimit(parseInt(e.target.value) || 0)}
+                placeholder="Ej: 20"
+              />
+            </div>
+            <div className="limit-picker-actions">
+              <button className="toolbar-btn" onClick={() => setShowLimitPicker(false)}>Cancelar</button>
+              <button className="toolbar-btn primary" onClick={() => startProcessing(processLimit)}>
+                <Play size={13} /> Procesar {processLimit === 0 ? "todos" : processLimit} leads
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Detail side panel */}
