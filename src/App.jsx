@@ -1,9 +1,9 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import Papa from "papaparse";
-import { AllCommunityModule } from "ag-grid-community";
-import { AgGridProvider, AgGridReact } from "ag-grid-react";
-import "ag-grid-community/styles/ag-grid.css";
-import "ag-grid-community/styles/ag-theme-quartz.css";
+import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import { AgGridReact } from "ag-grid-react";
+
+ModuleRegistry.registerModules([AllCommunityModule]);
 import {
   Upload,
   Play,
@@ -25,7 +25,6 @@ import {
 import "./App.css";
 
 const CONCURRENCY = 3;
-const AG_MODULES = [AllCommunityModule];
 
 const CSV_FIELD_MAP = {
   email: ["email", "e-mail", "correo", "correo electrónico", "mail"],
@@ -850,9 +849,8 @@ function App() {
 
   // ─── Main grid view ───
   return (
-    <AgGridProvider modules={AG_MODULES}>
-      <div className="app">
-        <div className="topbar">
+    <div className="app">
+      <div className="topbar">
           <div className="topbar-logo"><Search size={16} /></div>
           <span className="topbar-title">Prospector</span>
           <div className="topbar-divider" />
@@ -932,9 +930,10 @@ function App() {
           <div className="progress-strip"><div className="progress-strip-fill" style={{ width: `${pct}%` }} /></div>
         )}
 
-        <div className="ag-theme-quartz grid-wrapper">
+        <div className="grid-wrapper" style={{ height: "calc(100vh - 180px)", width: "100%" }}>
           <AgGridReact
             ref={gridRef}
+            theme={themeQuartz}
             rowData={filteredLeads}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
@@ -1098,7 +1097,6 @@ function App() {
           </>
         )}
       </div>
-    </AgGridProvider>
   );
 }
 
