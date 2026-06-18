@@ -18,11 +18,11 @@ export default async (req) => {
       messages: [
         {
           role: "user",
-          content: `Limpia y normaliza el nombre de esta clínica o médico para usarlo en un email de marketing profesional en español. El valor original es: ${name}
+          content: `Limpia y normaliza el nombre de esta empresa o negocio para usarlo en un email de marketing profesional en español. El valor original es: ${name}
 
 Reglas de limpieza:
-1. Si el nombre está todo junto sin espacios (ej: "Drcolomer", "Drlalinde", "Faceliftbarcelona", "Drgarcia Paricio") separa correctamente las palabras y añade puntos donde corresponda (ej: "Dr. Colomer", "Dr. Lalinde", "Facelift Barcelona", "Dr. García Paricio").
-2. Si ya está bien escrito (ej: "DFINE Clinic", "Dr. Castro Sierra") devuélvelo exactamente igual.
+1. Si el nombre está todo junto sin espacios (ej: "Tecnologiaavanzada", "Consultoresasociados") separa correctamente las palabras y añade puntos donde corresponda (ej: "Tecnología Avanzada", "Consultores Asociados").
+2. Si ya está bien escrito (ej: "Acme Corp", "Tech Solutions") devuélvelo exactamente igual.
 3. Corrige mayúsculas/minúsculas si es necesario.
 4. Devuelve SOLO el nombre limpio, sin explicaciones ni texto adicional.`,
         },
