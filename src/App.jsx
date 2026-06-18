@@ -226,8 +226,15 @@ const DEFAULT_COL_DEF = {
 
 // ─── Main App ───
 
+function loadFromStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+}
+
 function App() {
-  const [leads, setLeads] = useState([]);
+  const [leads, setLeadsRaw] = useState(() => loadFromStorage("prospector_leads", []));
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -240,14 +247,32 @@ function App() {
   const [filterAplica, setFilterAplica] = useState(false);
   const [filterDone, setFilterDone] = useState(false);
   const [selectedCount, setSelectedCount] = useState(0);
-  const [spintaxText, setSpintaxText] = useState("");
+  const [spintaxText, setSpintaxText] = useState(() => loadFromStorage("prospector_spintax", ""));
   const [showSpintaxEditor, setShowSpintaxEditor] = useState(false);
+
+  const setLeads = useCallback((updater) => {
+    setLeadsRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try {
+        const toSave = next.map(({ serpResults, ...rest }) => rest);
+        localStorage.setItem("prospector_leads", JSON.stringify(toSave));
+      } catch (e) {
+        console.warn("[storage] No se pudo guardar:", e.message);
+      }
+      return next;
+    });
+  }, []);
   const fileInputRef = useRef(null);
+  const excludeInputRef = useRef(null);
   const abortRef = useRef(false);
   const logEndRef = useRef(null);
   const logUserScrolling = useRef(false);
   const logContainerRef = useRef(null);
   const gridRef = useRef(null);
+
+  useEffect(() => {
+    try { localStorage.setItem("prospector_spintax", JSON.stringify(spintaxText)); } catch {}
+  }, [spintaxText]);
 
   // ─── Batched update system ───
   const pendingLeadUpdatesRef = useRef(new Map());
@@ -747,6 +772,38 @@ function App() {
     return result;
   }, [leads, filterAplica, filterDone]);
 
+  const deleteSelected = useCallback(() => {
+    const api = gridRef.current?.api;
+    if (!api) return;
+    const selectedIds = new Set(api.getSelectedRows().map((r) => r.id));
+    if (selectedIds.size === 0) return;
+    setLeads((prev) => prev.filter((l) => !selectedIds.has(l.id)));
+    setSelectedCount(0);
+    addLog(`${selectedIds.size} leads eliminados`, "success");
+  }, [addLog]);
+
+  const handleExcludeCSV = useCallback((file) => {
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const emailCol = results.meta.fields?.find((f) => f.toLowerCase().includes("email"));
+        if (!emailCol) {
+          addLog("CSV de exclusión: no se encontró columna de email", "error");
+          return;
+        }
+        const excludeEmails = new Set(
+          results.data.map((r) => (r[emailCol] || "").trim().toLowerCase()).filter(Boolean)
+        );
+        const before = leads.length;
+        setLeads((prev) => prev.filter((l) => !excludeEmails.has((l.email || "").toLowerCase())));
+        const removed = before - leads.length + excludeEmails.size;
+        addLog(`CSV de exclusión cargado: ${excludeEmails.size} emails. Leads eliminados del listado.`, "success");
+      },
+    });
+  }, [leads, addLog]);
+
   const onRowClicked = useCallback(() => {}, []);
 
   const getRowClass = useCallback((params) => {
@@ -830,9 +887,13 @@ function App() {
               <button className="toolbar-btn" onClick={() => setLeads((prev) => prev.map((l) => ({ ...l, empresaNormalizada: "", servicio: "", detalle: "", generico: null, icebreaker: "", serpResults: null, serpQuery: "", hasRealSerpData: false, leadPosition: -1, aplica: null, status: "pending", error: "" })))}>
                 <RotateCcw size={13} /> Resetear
               </button>
-              <button className="toolbar-btn danger" onClick={() => { setLeads([]); setLogs([]); setProgress({ current: 0, total: 0, phase: "" }); }}>
+              <button className="toolbar-btn danger" onClick={() => { setLeads([]); setLogs([]); setProgress({ current: 0, total: 0, phase: "" }); localStorage.removeItem("prospector_leads"); }}>
                 <Trash2 size={13} /> Borrar
               </button>
+              <button className="toolbar-btn" onClick={() => excludeInputRef.current?.click()}>
+                <X size={13} /> Excluir CSV
+              </button>
+              <input ref={excludeInputRef} type="file" accept=".csv,.CSV" style={{ display: "none" }} onChange={(e) => { handleExcludeCSV(e.target.files[0]); e.target.value = ""; }} />
             </>
           ) : (
             <button className="toolbar-btn danger" onClick={() => { abortRef.current = true; }}><X size={13} /> Detener</button>
@@ -841,6 +902,11 @@ function App() {
             <>
               <div className="toolbar-separator" />
               <span className="toolbar-badge-selected">{selectedCount} seleccionados</span>
+              {!processing && (
+                <button className="toolbar-btn danger" onClick={deleteSelected}>
+                  <Trash2 size={13} /> Eliminar selección
+                </button>
+              )}
             </>
           )}
           <div className="toolbar-separator" />
