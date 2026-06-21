@@ -233,7 +233,7 @@ function loadFromStorage(key, fallback) {
 }
 
 function App() {
-  const [leads, setLeadsRaw] = useState(() => loadFromStorage("prospector_leads", []));
+  const [leads, setLeads] = useState(() => loadFromStorage("prospector_leads", []));
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState([]);
   const [selectedLead, setSelectedLead] = useState(null);
@@ -248,19 +248,6 @@ function App() {
   const [selectedCount, setSelectedCount] = useState(0);
   const [spintaxText, setSpintaxText] = useState(() => loadFromStorage("prospector_spintax", ""));
   const [showSpintaxEditor, setShowSpintaxEditor] = useState(false);
-
-  const setLeads = useCallback((updater) => {
-    setLeadsRaw((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      try {
-        const toSave = next.map(({ serpResults, ...rest }) => rest);
-        localStorage.setItem("prospector_leads", JSON.stringify(toSave));
-      } catch (e) {
-        console.warn("[storage] No se pudo guardar:", e.message);
-      }
-      return next;
-    });
-  }, []);
   const fileInputRef = useRef(null);
   const excludeInputRef = useRef(null);
   const abortRef = useRef(false);
@@ -268,6 +255,32 @@ function App() {
   const logUserScrolling = useRef(false);
   const logContainerRef = useRef(null);
   const gridRef = useRef(null);
+  const saveTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (leads.length === 0) return;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      try {
+        const toSave = leads.map(({ serpResults, ...rest }) => rest);
+        localStorage.setItem("prospector_leads", JSON.stringify(toSave));
+      } catch (e) {
+        console.warn("[storage] No se pudo guardar:", e.message);
+      }
+    }, 2000);
+    return () => clearTimeout(saveTimerRef.current);
+  }, [leads]);
+
+  useEffect(() => {
+    const onUnload = () => {
+      try {
+        const toSave = leads.map(({ serpResults, ...rest }) => rest);
+        localStorage.setItem("prospector_leads", JSON.stringify(toSave));
+      } catch {}
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, [leads]);
 
   useEffect(() => {
     try { localStorage.setItem("prospector_spintax", JSON.stringify(spintaxText)); } catch {}

@@ -63,11 +63,20 @@ export default async (req) => {
     const prompt = buildPrompt(companyName, city, servicio, competitorContext, cleanDetalle);
     let icebreaker = await generateIcebreakerText(prompt);
 
+    if (!icebreaker) {
+      console.warn(`[icebreaker] IA rechazó generar para "${companyName}" → revisión manual`);
+      return json({
+        icebreaker: null, hasRealSerpData: !!competitorContext,
+        serpQuery: `${servicio} en ${city}`,
+        leadPosition, skipped: true, skipReason: "IA rechazó generar icebreaker",
+      });
+    }
+
     // ─── GATE 2: Saneado de tuteo ───
     if (containsTuteo(icebreaker)) {
       console.warn(`[icebreaker] Tuteo detectado en "${companyName}", reintentando...`);
       icebreaker = await generateIcebreakerText(prompt);
-      if (containsTuteo(icebreaker)) {
+      if (!icebreaker || containsTuteo(icebreaker)) {
         console.warn(`[icebreaker] Tuteo persiste tras reintento en "${companyName}" → revisión manual`);
         return json({
           icebreaker, hasRealSerpData: !!competitorContext,
@@ -112,17 +121,24 @@ function containsTuteo(text) {
   return TUTEO_PATTERN.test(text);
 }
 
+const AI_REFUSAL_PATTERN = /lo siento|no puedo|i'm sorry|i cannot|como modelo|como ia|disculpa|perdona|i apologize/i;
+
 async function generateIcebreakerText(prompt) {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [{ role: "user", content: prompt }],
-    max_tokens: 200,
-    temperature: 0.7,
-  });
-  let text = response.choices[0].message.content
-    .trim().replace(/^["']|["']$/g, "");
-  if (!/[.!?]$/.test(text)) text += ".";
-  return text;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 200,
+      temperature: 0.7 + attempt * 0.1,
+    });
+    let text = response.choices[0].message.content
+      .trim().replace(/^["']|["']$/g, "");
+    if (!/[.!?]$/.test(text)) text += ".";
+
+    if (!AI_REFUSAL_PATTERN.test(text)) return text;
+    console.warn(`[icebreaker] Respuesta IA rechazada (intento ${attempt + 1}): "${text.slice(0, 80)}..."`);
+  }
+  return null;
 }
 
 // ─── POSITION DETECTION ───
